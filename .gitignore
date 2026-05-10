@@ -1,0 +1,28 @@
+# Sensitive local configuration
+cyberark.ini
+*.local.ini
+*.secret.*
+*password*
+*cred*
+
+# Exported data and reports
+*.csv
+*.json
+*.log
+reports/
+temp/
+debug_*/
+checkpoint.json
+export_summary.json
+*_metadata.json
+
+# PowerShell scratch files
+*.ps1.bak
+*.ps1.old
+*.ps1~
+ModuleAnalysisCache
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
