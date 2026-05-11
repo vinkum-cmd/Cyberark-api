@@ -75,14 +75,33 @@ jobs:
           }
 
           Write-Host "Checking config path: $configPath"
-          if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
-            throw "CyberArk config file not found: $configPath"
+          $configAccessible = $false
+
+          try {
+            $configAccessible = Test-Path -LiteralPath $configPath -PathType Leaf
+          }
+          catch {
+            Write-Warning "Config path exists check failed or access was denied: $($_.Exception.Message)"
+            $configAccessible = $false
           }
 
-          "CONFIG_PATH=$configPath" | Out-File -FilePath $env:GITHUB_ENV -Append
-          Write-Host "CyberArk config file found."
+          if ($configAccessible) {
+            "CONFIG_AVAILABLE=true" | Out-File -FilePath $env:GITHUB_ENV -Append
+            "CONFIG_PATH=$configPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+            Write-Host "CyberArk config file found and is accessible."
+          }
+          else {
+            "CONFIG_AVAILABLE=false" | Out-File -FilePath $env:GITHUB_ENV -Append
+            Write-Warning "CyberArk config file is not accessible to the GitHub runner service account."
+            Write-Host "For export mode, move cyberark.ini to a runner-readable path such as C:\CyberArk\config\cyberark.ini or grant read access to the runner service account."
+
+            if ($env:RESOLVED_RUN_MODE -eq 'export') {
+              throw "Export mode requires an accessible CyberArk config file."
+            }
+          }
 
       - name: Validate config file shape without printing secrets
+        if: ${{ env.CONFIG_AVAILABLE == 'true' }}
         shell: powershell
         run: |
           $content = Get-Content -LiteralPath $env:CONFIG_PATH -Raw
@@ -115,6 +134,13 @@ jobs:
             throw "Export mode requires a non-empty PASSWORD in the local config file or the script must be updated for non-interactive secret retrieval."
           }
 
+      - name: Skip config validation when config is not accessible
+        if: ${{ env.CONFIG_AVAILABLE != 'true' }}
+        shell: powershell
+        run: |
+          Write-Host "Config validation skipped because cyberark.ini is not accessible to the runner account."
+          Write-Host "Validation-only mode can continue. Export mode will require fixing file permissions or using a runner-readable path."
+
       - name: Validate PowerShell scripts
         shell: powershell
         run: |
@@ -127,7 +153,7 @@ jobs:
           Write-Host "Validation-only mode selected. No CyberArk export was run."
 
       - name: Run CyberArk account export
-        if: ${{ env.RESOLVED_RUN_MODE == 'export' && env.RESOLVED_CONFIRM_EXPORT == 'EXPORT' }}
+        if: ${{ env.RESOLVED_RUN_MODE == 'export' && env.RESOLVED_CONFIRM_EXPORT == 'EXPORT' && env.CONFIG_AVAILABLE == 'true' }}
         shell: powershell
         run: |
           $argsList = @('-ConfigPath', $env:CONFIG_PATH)
@@ -144,3 +170,9 @@ jobs:
         shell: powershell
         run: |
           throw "Export mode was selected, but confirm_export was not EXPORT. No export was run."
+
+      - name: Refuse export without accessible config
+        if: ${{ env.RESOLVED_RUN_MODE == 'export' && env.RESOLVED_CONFIRM_EXPORT == 'EXPORT' && env.CONFIG_AVAILABLE != 'true' }}
+        shell: powershell
+        run: |
+          throw "Export was confirmed, but cyberark.ini is not accessible to the runner account."
