@@ -36,23 +36,47 @@ jobs:
         shell: powershell
         run: |
           $resolvedPvwaUrl = $env:PVWA_URL
-          $configPath = $env:CYBERARK_CONFIG_PATH
 
-          if ([string]::IsNullOrWhiteSpace($configPath)) {
-            $configPath = $env:DEFAULT_CYBERARK_CONFIG_PATH
+          $candidateConfigPaths = @()
+          if (-not [string]::IsNullOrWhiteSpace($env:CYBERARK_CONFIG_PATH)) {
+            $candidateConfigPaths += $env:CYBERARK_CONFIG_PATH
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:DEFAULT_CYBERARK_CONFIG_PATH)) {
+            $candidateConfigPaths += $env:DEFAULT_CYBERARK_CONFIG_PATH
+          }
+          $candidateConfigPaths += (Join-Path $env:GITHUB_WORKSPACE 'config\cyberark.ini')
+          $candidateConfigPaths += (Join-Path $env:GITHUB_WORKSPACE 'cyberark.ini')
+
+          $candidateConfigPaths = $candidateConfigPaths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+
+          Write-Host "PVWA_URL variable set: $(-not [string]::IsNullOrWhiteSpace($resolvedPvwaUrl))"
+          Write-Host "Checking candidate cyberark.ini paths:"
+          foreach ($candidate in $candidateConfigPaths) {
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+              Write-Host "  FOUND: $candidate"
+            }
+            else {
+              Write-Host "  MISSING: $candidate"
+            }
           }
 
-          if ([string]::IsNullOrWhiteSpace($resolvedPvwaUrl) -and -not [string]::IsNullOrWhiteSpace($configPath)) {
-            if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
-              throw "CyberArk config file was not found: $configPath"
+          if ([string]::IsNullOrWhiteSpace($resolvedPvwaUrl)) {
+            $configPath = $candidateConfigPaths | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+
+            if ($configPath) {
+              Write-Host "Reading PVWA_URL from local config file."
+              $configLines = Get-Content -LiteralPath $configPath
+              $pvwaLine = $configLines | Where-Object { $_ -match '^\s*PVWA_URL\s*=' } | Select-Object -First 1
+
+              if ($pvwaLine) {
+                $resolvedPvwaUrl = ($pvwaLine -replace '^\s*PVWA_URL\s*=\s*', '').Trim().Trim('"')
+              }
+              else {
+                Write-Warning "No PVWA_URL entry was found in the discovered config file."
+              }
             }
-
-            Write-Host "Reading PVWA_URL from local config file."
-            $configLines = Get-Content -LiteralPath $configPath
-            $pvwaLine = $configLines | Where-Object { $_ -match '^\s*PVWA_URL\s*=' } | Select-Object -First 1
-
-            if ($pvwaLine) {
-              $resolvedPvwaUrl = ($pvwaLine -replace '^\s*PVWA_URL\s*=\s*', '').Trim()
+            else {
+              Write-Warning "No local cyberark.ini file was found in the candidate paths."
             }
           }
 
