@@ -13,6 +13,7 @@ jobs:
     env:
       PVWA_URL: ${{ vars.PVWA_URL }}
       CYBERARK_CONFIG_PATH: ${{ vars.CYBERARK_CONFIG_PATH }}
+      DEFAULT_CYBERARK_CONFIG_PATH: C:\Users\vinodadmin\Desktop\chatgpt\ChatGPT-Remote\config\cyberark.ini
 
     steps:
       - name: Checkout repository
@@ -35,14 +36,19 @@ jobs:
         shell: powershell
         run: |
           $resolvedPvwaUrl = $env:PVWA_URL
+          $configPath = $env:CYBERARK_CONFIG_PATH
 
-          if ([string]::IsNullOrWhiteSpace($resolvedPvwaUrl) -and -not [string]::IsNullOrWhiteSpace($env:CYBERARK_CONFIG_PATH)) {
-            if (-not (Test-Path -LiteralPath $env:CYBERARK_CONFIG_PATH -PathType Leaf)) {
-              throw "CYBERARK_CONFIG_PATH is set but file was not found: $env:CYBERARK_CONFIG_PATH"
+          if ([string]::IsNullOrWhiteSpace($configPath)) {
+            $configPath = $env:DEFAULT_CYBERARK_CONFIG_PATH
+          }
+
+          if ([string]::IsNullOrWhiteSpace($resolvedPvwaUrl) -and -not [string]::IsNullOrWhiteSpace($configPath)) {
+            if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+              throw "CyberArk config file was not found: $configPath"
             }
 
-            Write-Host "Reading PVWA_URL from local config file path stored in CYBERARK_CONFIG_PATH."
-            $configLines = Get-Content -LiteralPath $env:CYBERARK_CONFIG_PATH
+            Write-Host "Reading PVWA_URL from local config file."
+            $configLines = Get-Content -LiteralPath $configPath
             $pvwaLine = $configLines | Where-Object { $_ -match '^\s*PVWA_URL\s*=' } | Select-Object -First 1
 
             if ($pvwaLine) {
@@ -70,7 +76,7 @@ jobs:
         if: ${{ env.PVWA_CONNECTIVITY_ENABLED != 'true' }}
         shell: powershell
         run: |
-          Write-Host "Skipping PVWA connectivity check. Set either PVWA_URL or CYBERARK_CONFIG_PATH as a repository variable."
+          Write-Host "Skipping PVWA connectivity check. Provide PVWA_URL or a reachable cyberark.ini path."
 
       - name: Upload validation output
         uses: actions/upload-artifact@v4
