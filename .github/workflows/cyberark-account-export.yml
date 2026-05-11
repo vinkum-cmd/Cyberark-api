@@ -1,0 +1,117 @@
+name: CyberArk Account Export
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_mode:
+        description: "Choose validate_only first. Use export only when ready."
+        required: true
+        default: "validate_only"
+        type: choice
+        options:
+          - validate_only
+          - export
+      confirm_export:
+        description: "Type EXPORT to run Get-CyberArkAccounts.ps1. Leave blank for validate_only."
+        required: false
+        default: ""
+        type: string
+      enable_debug:
+        description: "Enable script debug logging"
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  cyberark-account-export:
+    runs-on: [self-hosted, Windows, X64, cyberark-swaplab]
+    timeout-minutes: 60
+
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      CYBERARK_CONFIG_PATH: ${{ vars.CYBERARK_CONFIG_PATH }}
+      DEFAULT_CYBERARK_CONFIG_PATH: C:\Users\vinodadmin\Desktop\chatgpt\ChatGPT-Remote\config\cyberark.ini
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve local CyberArk config path
+        id: config
+        shell: powershell
+        run: |
+          $configPath = $env:CYBERARK_CONFIG_PATH
+          if ([string]::IsNullOrWhiteSpace($configPath)) {
+            $configPath = $env:DEFAULT_CYBERARK_CONFIG_PATH
+          }
+
+          Write-Host "Checking config path: $configPath"
+          if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+            throw "CyberArk config file not found: $configPath"
+          }
+
+          "CONFIG_PATH=$configPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "CyberArk config file found."
+
+      - name: Validate config file shape without printing secrets
+        shell: powershell
+        run: |
+          $content = Get-Content -LiteralPath $env:CONFIG_PATH -Raw
+
+          $requiredPatterns = @(
+            '\[CyberArk\]',
+            '^\s*PVWA_URL\s*=',
+            '^\s*AUTH_TYPE\s*=',
+            '^\s*USERNAME\s*='
+          )
+
+          foreach ($pattern in $requiredPatterns) {
+            if ($content -notmatch $pattern) {
+              throw "Config file is missing expected setting pattern: $pattern"
+            }
+          }
+
+          $pvwaLine = ($content -split "`r?`n") | Where-Object { $_ -match '^\s*PVWA_URL\s*=' } | Select-Object -First 1
+          $authLine = ($content -split "`r?`n") | Where-Object { $_ -match '^\s*AUTH_TYPE\s*=' } | Select-Object -First 1
+          $userLine = ($content -split "`r?`n") | Where-Object { $_ -match '^\s*USERNAME\s*=' } | Select-Object -First 1
+          $passwordLine = ($content -split "`r?`n") | Where-Object { $_ -match '^\s*PASSWORD\s*=' } | Select-Object -First 1
+
+          Write-Host "Config summary:"
+          Write-Host "  $pvwaLine"
+          Write-Host "  $authLine"
+          Write-Host "  USERNAME is set: $($userLine -match '=\s*\S+')"
+          Write-Host "  PASSWORD is set: $($passwordLine -match '=\s*\S+')"
+
+          if ('${{ inputs.run_mode }}' -eq 'export' -and -not ($passwordLine -match '=\s*\S+')) {
+            throw "Export mode requires a non-empty PASSWORD in the local config file or the script must be updated for non-interactive secret retrieval."
+          }
+
+      - name: Validate PowerShell scripts
+        shell: powershell
+        run: |
+          .\Test-RepoHealth.ps1 -RepoRoot $env:GITHUB_WORKSPACE
+
+      - name: Stop after validation
+        if: ${{ inputs.run_mode == 'validate_only' }}
+        shell: powershell
+        run: |
+          Write-Host "Validation-only mode selected. No CyberArk export was run."
+
+      - name: Run CyberArk account export
+        if: ${{ inputs.run_mode == 'export' && inputs.confirm_export == 'EXPORT' }}
+        shell: powershell
+        run: |
+          $argsList = @('-ConfigPath', $env:CONFIG_PATH)
+          if ('${{ inputs.enable_debug }}' -eq 'true') {
+            $argsList += '-EnableDebug'
+          }
+
+          Write-Host "Starting CyberArk account export using local config."
+          Write-Host "Reports are written by the script to C:\temp\reports on the runner."
+          & .\Get-CyberArkAccounts.ps1 @argsList
+
+      - name: Refuse export without explicit confirmation
+        if: ${{ inputs.run_mode == 'export' && inputs.confirm_export != 'EXPORT' }}
+        shell: powershell
+        run: |
+          throw "Export mode was selected, but confirm_export was not EXPORT. No export was run."
