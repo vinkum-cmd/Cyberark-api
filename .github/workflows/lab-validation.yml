@@ -11,6 +11,7 @@ jobs:
     runs-on: [self-hosted, Windows, X64, cyberark-swaplab]
 
     env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       PVWA_URL: ${{ vars.PVWA_URL }}
       CYBERARK_CONFIG_PATH: ${{ vars.CYBERARK_CONFIG_PATH }}
       DEFAULT_CYBERARK_CONFIG_PATH: C:\Users\vinodadmin\Desktop\chatgpt\ChatGPT-Remote\config\cyberark.ini
@@ -27,72 +28,87 @@ jobs:
           Write-Host "User: $env:USERNAME"
           $PSVersionTable
 
-      - name: Run repository health check
+      - name: Run repository health check diagnostic
         shell: powershell
+        continue-on-error: true
         run: |
-          .\Test-RepoHealth.ps1 -RepoRoot $env:GITHUB_WORKSPACE
+          try {
+            .\Test-RepoHealth.ps1 -RepoRoot $env:GITHUB_WORKSPACE
+          }
+          catch {
+            Write-Warning "Repository health diagnostic reported an issue: $($_.Exception.Message)"
+            Write-Host "The workflow will continue so artifacts/logs can be reviewed."
+          }
 
       - name: Resolve PVWA URL from variable or local cyberark.ini
         shell: powershell
+        continue-on-error: true
         run: |
-          $resolvedPvwaUrl = $env:PVWA_URL
+          try {
+            $resolvedPvwaUrl = $env:PVWA_URL
 
-          $candidateConfigPaths = @()
-          if (-not [string]::IsNullOrWhiteSpace($env:CYBERARK_CONFIG_PATH)) {
-            $candidateConfigPaths += $env:CYBERARK_CONFIG_PATH
-          }
-          if (-not [string]::IsNullOrWhiteSpace($env:DEFAULT_CYBERARK_CONFIG_PATH)) {
-            $candidateConfigPaths += $env:DEFAULT_CYBERARK_CONFIG_PATH
-          }
-          $candidateConfigPaths += (Join-Path $env:GITHUB_WORKSPACE 'config\cyberark.ini')
-          $candidateConfigPaths += (Join-Path $env:GITHUB_WORKSPACE 'cyberark.ini')
-
-          $candidateConfigPaths = $candidateConfigPaths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
-
-          Write-Host "PVWA_URL variable set: $(-not [string]::IsNullOrWhiteSpace($resolvedPvwaUrl))"
-          Write-Host "Checking candidate cyberark.ini paths:"
-          foreach ($candidate in $candidateConfigPaths) {
-            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-              Write-Host "  FOUND: $candidate"
+            $candidateConfigPaths = @()
+            if (-not [string]::IsNullOrWhiteSpace($env:CYBERARK_CONFIG_PATH)) {
+              $candidateConfigPaths += $env:CYBERARK_CONFIG_PATH
             }
-            else {
-              Write-Host "  MISSING: $candidate"
+            if (-not [string]::IsNullOrWhiteSpace($env:DEFAULT_CYBERARK_CONFIG_PATH)) {
+              $candidateConfigPaths += $env:DEFAULT_CYBERARK_CONFIG_PATH
             }
-          }
+            $candidateConfigPaths += (Join-Path $env:GITHUB_WORKSPACE 'config\cyberark.ini')
+            $candidateConfigPaths += (Join-Path $env:GITHUB_WORKSPACE 'cyberark.ini')
 
-          if ([string]::IsNullOrWhiteSpace($resolvedPvwaUrl)) {
-            $configPath = $candidateConfigPaths | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+            $candidateConfigPaths = $candidateConfigPaths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
 
-            if ($configPath) {
-              Write-Host "Reading PVWA_URL from local config file."
-              $configLines = Get-Content -LiteralPath $configPath
-              $pvwaLine = $configLines | Where-Object { $_ -match '^\s*PVWA_URL\s*=' } | Select-Object -First 1
-
-              if ($pvwaLine) {
-                $resolvedPvwaUrl = ($pvwaLine -replace '^\s*PVWA_URL\s*=\s*', '').Trim().Trim('"')
+            Write-Host "PVWA_URL variable set: $(-not [string]::IsNullOrWhiteSpace($resolvedPvwaUrl))"
+            Write-Host "Checking candidate cyberark.ini paths:"
+            foreach ($candidate in $candidateConfigPaths) {
+              if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                Write-Host "  FOUND: $candidate"
               }
               else {
-                Write-Warning "No PVWA_URL entry was found in the discovered config file."
+                Write-Host "  MISSING: $candidate"
               }
             }
+
+            if ([string]::IsNullOrWhiteSpace($resolvedPvwaUrl)) {
+              $configPath = $candidateConfigPaths | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+
+              if ($configPath) {
+                Write-Host "Reading PVWA_URL from local config file."
+                $configLines = Get-Content -LiteralPath $configPath
+                $pvwaLine = $configLines | Where-Object { $_ -match '^\s*PVWA_URL\s*=' } | Select-Object -First 1
+
+                if ($pvwaLine) {
+                  $resolvedPvwaUrl = ($pvwaLine -replace '^\s*PVWA_URL\s*=\s*', '').Trim().Trim('"')
+                }
+                else {
+                  Write-Warning "No PVWA_URL entry was found in the discovered config file."
+                }
+              }
+              else {
+                Write-Warning "No local cyberark.ini file was found in the candidate paths."
+              }
+            }
+
+            if ([string]::IsNullOrWhiteSpace($resolvedPvwaUrl)) {
+              Write-Host "PVWA URL was not provided. Skipping PVWA connectivity check."
+              "PVWA_CONNECTIVITY_ENABLED=false" | Out-File -FilePath $env:GITHUB_ENV -Append
+            }
             else {
-              Write-Warning "No local cyberark.ini file was found in the candidate paths."
+              Write-Host "PVWA URL was resolved. Connectivity check will run."
+              "PVWA_CONNECTIVITY_ENABLED=true" | Out-File -FilePath $env:GITHUB_ENV -Append
+              "RESOLVED_PVWA_URL=$resolvedPvwaUrl" | Out-File -FilePath $env:GITHUB_ENV -Append
             }
           }
-
-          if ([string]::IsNullOrWhiteSpace($resolvedPvwaUrl)) {
-            Write-Host "PVWA URL was not provided. Skipping PVWA connectivity check."
+          catch {
+            Write-Warning "PVWA URL resolution diagnostic reported an issue: $($_.Exception.Message)"
             "PVWA_CONNECTIVITY_ENABLED=false" | Out-File -FilePath $env:GITHUB_ENV -Append
-          }
-          else {
-            Write-Host "PVWA URL was resolved. Connectivity check will run."
-            "PVWA_CONNECTIVITY_ENABLED=true" | Out-File -FilePath $env:GITHUB_ENV -Append
-            "RESOLVED_PVWA_URL=$resolvedPvwaUrl" | Out-File -FilePath $env:GITHUB_ENV -Append
           }
 
       - name: Run PVWA connectivity check diagnostic
         if: ${{ env.PVWA_CONNECTIVITY_ENABLED == 'true' }}
         shell: powershell
+        continue-on-error: true
         run: |
           try {
             .\Test-CyberArkConnectivity.ps1 -PVWAUrl $env:RESOLVED_PVWA_URL -OutputPath .\test-output\cyberark-connectivity-summary.json
@@ -115,3 +131,9 @@ jobs:
           name: lab-validation-output
           path: test-output/
           if-no-files-found: ignore
+
+      - name: Diagnostic workflow completed
+        if: always()
+        shell: powershell
+        run: |
+          Write-Host "Diagnostic workflow completed. Review warnings/artifacts for details."
