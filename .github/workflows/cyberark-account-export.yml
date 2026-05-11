@@ -1,6 +1,14 @@
 name: CyberArk Account Export
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/cyberark-account-export.yml'
+      - 'Get-CyberArkAccounts.ps1'
+      - 'Test-RepoHealth.ps1'
+      - 'config/cyberark.example.ini'
   workflow_dispatch:
     inputs:
       run_mode:
@@ -35,6 +43,27 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Resolve run mode
+        shell: powershell
+        run: |
+          $runMode = '${{ inputs.run_mode }}'
+          $confirmExport = '${{ inputs.confirm_export }}'
+          $enableDebug = '${{ inputs.enable_debug }}'
+
+          if ([string]::IsNullOrWhiteSpace($runMode)) {
+            $runMode = 'validate_only'
+          }
+          if ([string]::IsNullOrWhiteSpace($enableDebug)) {
+            $enableDebug = 'false'
+          }
+
+          "RESOLVED_RUN_MODE=$runMode" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "RESOLVED_CONFIRM_EXPORT=$confirmExport" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "RESOLVED_ENABLE_DEBUG=$enableDebug" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+          Write-Host "Resolved run mode: $runMode"
+          Write-Host "Enable debug: $enableDebug"
 
       - name: Resolve local CyberArk config path
         id: config
@@ -82,7 +111,7 @@ jobs:
           Write-Host "  USERNAME is set: $($userLine -match '=\s*\S+')"
           Write-Host "  PASSWORD is set: $($passwordLine -match '=\s*\S+')"
 
-          if ('${{ inputs.run_mode }}' -eq 'export' -and -not ($passwordLine -match '=\s*\S+')) {
+          if ($env:RESOLVED_RUN_MODE -eq 'export' -and -not ($passwordLine -match '=\s*\S+')) {
             throw "Export mode requires a non-empty PASSWORD in the local config file or the script must be updated for non-interactive secret retrieval."
           }
 
@@ -92,17 +121,17 @@ jobs:
           .\Test-RepoHealth.ps1 -RepoRoot $env:GITHUB_WORKSPACE
 
       - name: Stop after validation
-        if: ${{ inputs.run_mode == 'validate_only' }}
+        if: ${{ env.RESOLVED_RUN_MODE == 'validate_only' }}
         shell: powershell
         run: |
           Write-Host "Validation-only mode selected. No CyberArk export was run."
 
       - name: Run CyberArk account export
-        if: ${{ inputs.run_mode == 'export' && inputs.confirm_export == 'EXPORT' }}
+        if: ${{ env.RESOLVED_RUN_MODE == 'export' && env.RESOLVED_CONFIRM_EXPORT == 'EXPORT' }}
         shell: powershell
         run: |
           $argsList = @('-ConfigPath', $env:CONFIG_PATH)
-          if ('${{ inputs.enable_debug }}' -eq 'true') {
+          if ($env:RESOLVED_ENABLE_DEBUG -eq 'true') {
             $argsList += '-EnableDebug'
           }
 
@@ -111,7 +140,7 @@ jobs:
           & .\Get-CyberArkAccounts.ps1 @argsList
 
       - name: Refuse export without explicit confirmation
-        if: ${{ inputs.run_mode == 'export' && inputs.confirm_export != 'EXPORT' }}
+        if: ${{ env.RESOLVED_RUN_MODE == 'export' && env.RESOLVED_CONFIRM_EXPORT != 'EXPORT' }}
         shell: powershell
         run: |
           throw "Export mode was selected, but confirm_export was not EXPORT. No export was run."
