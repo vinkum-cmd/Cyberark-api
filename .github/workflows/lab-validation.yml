@@ -1,0 +1,61 @@
+name: Lab Validation
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: [self-hosted, windows, cyberark-lab]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Show runner and PowerShell info
+        shell: powershell
+        run: |
+          Write-Host "Runner machine: $env:COMPUTERNAME"
+          Write-Host "Workspace: $env:GITHUB_WORKSPACE"
+          Write-Host "User: $env:USERNAME"
+          $PSVersionTable
+
+      - name: List repository files
+        shell: powershell
+        run: |
+          Get-ChildItem -Force
+
+      - name: Validate core project files exist
+        shell: powershell
+        run: |
+          $requiredFiles = @(
+            'Get-CyberArkAccounts.ps1',
+            'Filter-CyberArkAccounts.ps1',
+            'ReadMe.md',
+            'config/cyberark.example.ini'
+          )
+
+          foreach ($file in $requiredFiles) {
+            if (-not (Test-Path $file)) {
+              throw "Required file missing: $file"
+            }
+            Write-Host "Found: $file"
+          }
+
+      - name: Parse PowerShell scripts
+        shell: powershell
+        run: |
+          $scripts = Get-ChildItem -Path . -Filter *.ps1 -Recurse
+          foreach ($script in $scripts) {
+            Write-Host "Parsing $($script.FullName)"
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error $_.Message }
+              throw "PowerShell parse errors found in $($script.Name)"
+            }
+          }
+          Write-Host "PowerShell syntax validation passed."
