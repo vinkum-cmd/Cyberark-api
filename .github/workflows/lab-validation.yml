@@ -10,6 +10,9 @@ jobs:
   validate:
     runs-on: [self-hosted, Windows, X64, cyberark-swaplab]
 
+    env:
+      PVWA_URL: ${{ vars.PVWA_URL }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,10 +30,22 @@ jobs:
         run: |
           .\Test-RepoHealth.ps1 -RepoRoot $env:GITHUB_WORKSPACE
 
-      - name: Upload health check output
+      - name: Run PVWA connectivity check
+        if: ${{ vars.PVWA_URL != '' }}
+        shell: powershell
+        run: |
+          .\Test-CyberArkConnectivity.ps1 -PVWAUrl $env:PVWA_URL -OutputPath .\test-output\cyberark-connectivity-summary.json
+
+      - name: Skip PVWA connectivity check when PVWA_URL is not set
+        if: ${{ vars.PVWA_URL == '' }}
+        shell: powershell
+        run: |
+          Write-Host "Repository variable PVWA_URL is not set. Skipping PVWA connectivity check."
+
+      - name: Upload validation output
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: repo-health-output
+          name: lab-validation-output
           path: test-output/
           if-no-files-found: ignore
