@@ -22,40 +22,15 @@ jobs:
           Write-Host "User: $env:USERNAME"
           $PSVersionTable
 
-      - name: List repository files
+      - name: Run repository health check
         shell: powershell
         run: |
-          Get-ChildItem -Force
+          .\Test-RepoHealth.ps1 -RepoRoot $env:GITHUB_WORKSPACE
 
-      - name: Validate core project files exist
-        shell: powershell
-        run: |
-          $requiredFiles = @(
-            'Get-CyberArkAccounts.ps1',
-            'Filter-CyberArkAccounts.ps1',
-            'ReadMe.md',
-            'config/cyberark.example.ini'
-          )
-
-          foreach ($file in $requiredFiles) {
-            if (-not (Test-Path $file)) {
-              throw "Required file missing: $file"
-            }
-            Write-Host "Found: $file"
-          }
-
-      - name: Parse PowerShell scripts
-        shell: powershell
-        run: |
-          $scripts = Get-ChildItem -Path . -Filter *.ps1 -Recurse
-          foreach ($script in $scripts) {
-            Write-Host "Parsing $($script.FullName)"
-            $tokens = $null
-            $errors = $null
-            [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$errors) | Out-Null
-            if ($errors.Count -gt 0) {
-              $errors | ForEach-Object { Write-Error $_.Message }
-              throw "PowerShell parse errors found in $($script.Name)"
-            }
-          }
-          Write-Host "PowerShell syntax validation passed."
+      - name: Upload health check output
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: repo-health-output
+          path: test-output/
+          if-no-files-found: ignore
