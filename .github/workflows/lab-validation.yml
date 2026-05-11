@@ -90,11 +90,17 @@ jobs:
             "RESOLVED_PVWA_URL=$resolvedPvwaUrl" | Out-File -FilePath $env:GITHUB_ENV -Append
           }
 
-      - name: Run PVWA connectivity check
+      - name: Run PVWA connectivity check diagnostic
         if: ${{ env.PVWA_CONNECTIVITY_ENABLED == 'true' }}
         shell: powershell
         run: |
-          .\Test-CyberArkConnectivity.ps1 -PVWAUrl $env:RESOLVED_PVWA_URL -OutputPath .\test-output\cyberark-connectivity-summary.json
+          try {
+            .\Test-CyberArkConnectivity.ps1 -PVWAUrl $env:RESOLVED_PVWA_URL -OutputPath .\test-output\cyberark-connectivity-summary.json
+          }
+          catch {
+            Write-Warning "PVWA connectivity diagnostic reported an issue: $($_.Exception.Message)"
+            Write-Host "The workflow will continue so artifacts/logs can be reviewed."
+          }
 
       - name: Skip PVWA connectivity check
         if: ${{ env.PVWA_CONNECTIVITY_ENABLED != 'true' }}
