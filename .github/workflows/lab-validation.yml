@@ -12,6 +12,7 @@ jobs:
 
     env:
       PVWA_URL: ${{ vars.PVWA_URL }}
+      CYBERARK_CONFIG_PATH: ${{ vars.CYBERARK_CONFIG_PATH }}
 
     steps:
       - name: Checkout repository
@@ -30,17 +31,46 @@ jobs:
         run: |
           .\Test-RepoHealth.ps1 -RepoRoot $env:GITHUB_WORKSPACE
 
-      - name: Run PVWA connectivity check
-        if: ${{ vars.PVWA_URL != '' }}
+      - name: Resolve PVWA URL from variable or local cyberark.ini
         shell: powershell
         run: |
-          .\Test-CyberArkConnectivity.ps1 -PVWAUrl $env:PVWA_URL -OutputPath .\test-output\cyberark-connectivity-summary.json
+          $resolvedPvwaUrl = $env:PVWA_URL
 
-      - name: Skip PVWA connectivity check when PVWA_URL is not set
-        if: ${{ vars.PVWA_URL == '' }}
+          if ([string]::IsNullOrWhiteSpace($resolvedPvwaUrl) -and -not [string]::IsNullOrWhiteSpace($env:CYBERARK_CONFIG_PATH)) {
+            if (-not (Test-Path -LiteralPath $env:CYBERARK_CONFIG_PATH -PathType Leaf)) {
+              throw "CYBERARK_CONFIG_PATH is set but file was not found: $env:CYBERARK_CONFIG_PATH"
+            }
+
+            Write-Host "Reading PVWA_URL from local config file path stored in CYBERARK_CONFIG_PATH."
+            $configLines = Get-Content -LiteralPath $env:CYBERARK_CONFIG_PATH
+            $pvwaLine = $configLines | Where-Object { $_ -match '^\s*PVWA_URL\s*=' } | Select-Object -First 1
+
+            if ($pvwaLine) {
+              $resolvedPvwaUrl = ($pvwaLine -replace '^\s*PVWA_URL\s*=\s*', '').Trim()
+            }
+          }
+
+          if ([string]::IsNullOrWhiteSpace($resolvedPvwaUrl)) {
+            Write-Host "PVWA URL was not provided. Skipping PVWA connectivity check."
+            "PVWA_CONNECTIVITY_ENABLED=false" | Out-File -FilePath $env:GITHUB_ENV -Append
+          }
+          else {
+            Write-Host "PVWA URL was resolved. Connectivity check will run."
+            "PVWA_CONNECTIVITY_ENABLED=true" | Out-File -FilePath $env:GITHUB_ENV -Append
+            "RESOLVED_PVWA_URL=$resolvedPvwaUrl" | Out-File -FilePath $env:GITHUB_ENV -Append
+          }
+
+      - name: Run PVWA connectivity check
+        if: ${{ env.PVWA_CONNECTIVITY_ENABLED == 'true' }}
         shell: powershell
         run: |
-          Write-Host "Repository variable PVWA_URL is not set. Skipping PVWA connectivity check."
+          .\Test-CyberArkConnectivity.ps1 -PVWAUrl $env:RESOLVED_PVWA_URL -OutputPath .\test-output\cyberark-connectivity-summary.json
+
+      - name: Skip PVWA connectivity check
+        if: ${{ env.PVWA_CONNECTIVITY_ENABLED != 'true' }}
+        shell: powershell
+        run: |
+          Write-Host "Skipping PVWA connectivity check. Set either PVWA_URL or CYBERARK_CONFIG_PATH as a repository variable."
 
       - name: Upload validation output
         uses: actions/upload-artifact@v4
